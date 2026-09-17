@@ -73,9 +73,16 @@ final class DestinationSearchService {
     }
 
     /**
-     * Starts a fresh autocomplete billing session after a destination is selected.
+     * Ends the autocomplete session and removes transient search results.
      */
-    func endSession() { sessionToken = GMSAutocompleteSessionToken() }
+    func endSession() {
+        searchTask?.cancel()
+        queryGeneration += 1
+        sessionToken = GMSAutocompleteSessionToken()
+        suggestions = []
+        isSearching = false
+        message = nil
+    }
 
     /**
      * Publishes a user-facing error from a failed place selection.
