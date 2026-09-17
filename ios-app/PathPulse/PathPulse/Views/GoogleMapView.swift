@@ -5,12 +5,14 @@ import GoogleMaps
 struct GoogleMapView: UIViewRepresentable {
     let coordinate: CLLocationCoordinate2D?
     let destination: Destination?
+    let route: WalkingRoute?
     let isLocationEnabled: Bool
     let recenterVersion: Int
 
     final class Coordinator {
         var lastRecenterVersion = -1
         var lastDestinationID: String?
+        var lastRouteID: UUID?
     }
 
     /**
@@ -39,7 +41,7 @@ struct GoogleMapView: UIViewRepresentable {
     }
 
     /**
-     * Updates location visibility and applies new recenter requests.
+     * Updates location visibility, markers, route geometry, and camera requests.
      *
      * @param uiView The existing Google map.
      * @param context The SwiftUI context containing the map coordinator.
@@ -52,6 +54,33 @@ struct GoogleMapView: UIViewRepresentable {
             marker.title = destination.name
             marker.snippet = destination.address
             marker.map = uiView
+        }
+
+        var routeBounds: GMSCoordinateBounds?
+        var routeChanged = false
+        if let route, let first = route.geometry.first {
+            let path = GMSMutablePath()
+            route.geometry.forEach { path.add($0.locationCoordinate) }
+            let polyline = GMSPolyline(path: path)
+            polyline.strokeColor = .systemBlue
+            polyline.strokeWidth = 6
+            polyline.zIndex = 1
+            polyline.map = uiView
+
+            routeChanged = context.coordinator.lastRouteID != route.id
+            if routeChanged {
+                context.coordinator.lastRouteID = route.id
+                var bounds = GMSCoordinateBounds(
+                    coordinate: first.locationCoordinate,
+                    coordinate: first.locationCoordinate
+                )
+                route.geometry.dropFirst().forEach {
+                    bounds = bounds.includingCoordinate($0.locationCoordinate)
+                }
+                routeBounds = bounds
+            }
+        } else {
+            context.coordinator.lastRouteID = nil
         }
 
         if let coordinate,
@@ -71,6 +100,10 @@ struct GoogleMapView: UIViewRepresentable {
             uiView.animate(with: GMSCameraUpdate.fit(bounds, withPadding: 48))
         } else if let destination {
             uiView.animate(to: GMSCameraPosition(target: destination.coordinate.locationCoordinate, zoom: 16))
+        }
+
+        if routeChanged, let routeBounds {
+            uiView.animate(with: GMSCameraUpdate.fit(routeBounds, withPadding: 48))
         }
     }
 }
