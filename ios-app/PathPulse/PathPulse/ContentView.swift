@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var destination: Destination?
     @State private var walkingRoute: WalkingRoute?
     @State private var routeMessage: String?
+    @State private var isNavigationStarted = false
     @State private var isSelecting = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -26,9 +27,14 @@ struct ContentView: View {
         NavigationStack {
             Group {
                 if mapsConfigured {
-                    VStack(spacing: 0) {
-                        VStack(spacing: 8) {
-                            if destination == nil {
+                    if isNavigationStarted, let walkingRoute {
+                        RouteDirectionsView(route: walkingRoute) {
+                            isNavigationStarted = false
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            VStack(spacing: 8) {
+                                if destination == nil {
                                 TextField("Where do you want to go?", text: $query)
                                     .textFieldStyle(.roundedBorder)
                                     .onChange(of: query) { _, value in
@@ -50,6 +56,7 @@ struct ContentView: View {
                                                 let selected = try await search.select(suggestion)
                                                 search.endSession()
                                                 query = ""
+                                                isNavigationStarted = false
                                                 destination = selected
                                             } catch {
                                                 search.show(error: error)
@@ -72,7 +79,12 @@ struct ContentView: View {
                                 HStack {
                                     Label(destination.name, systemImage: "mappin.and.ellipse")
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    Button("Clear") { self.destination = nil; query = "" }
+                                    Button("Clear") {
+                                        self.destination = nil
+                                        walkingRoute = nil
+                                        isNavigationStarted = false
+                                        query = ""
+                                    }
                                 }
                             }
                         }
@@ -87,6 +99,28 @@ struct ContentView: View {
                                 && scenePhase == .active,
                             recenterVersion: location.recenterVersion
                         )
+
+                        if let walkingRoute {
+                            if !isNavigationStarted {
+                                VStack(spacing: 10) {
+                                    Label(
+                                        "Walking route: \(RouteFormatting.distance(walkingRoute.distanceMeters)), \(RouteFormatting.duration(walkingRoute.durationSeconds))",
+                                        systemImage: "figure.walk"
+                                    )
+                                    .font(.callout)
+
+                                    Button {
+                                        isNavigationStarted = true
+                                    } label: {
+                                        Label("Start", systemImage: "play.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 10)
+                            }
+                        }
 
                         VStack(spacing: 12) {
                             if let message = location.message {
@@ -105,14 +139,6 @@ struct ContentView: View {
                                     .multilineTextAlignment(.center)
                             }
 
-                            if let walkingRoute {
-                                Label(
-                                    "Walking route: \(RouteFormatting.distance(walkingRoute.distanceMeters)), \(RouteFormatting.duration(walkingRoute.durationSeconds))",
-                                    systemImage: "figure.walk"
-                                )
-                                .font(.callout)
-                            }
-
                             Button {
                                 location.requestLocation()
                             } label: {
@@ -125,6 +151,7 @@ struct ContentView: View {
                             )
                         }
                         .padding()
+                        }
                     }
                 } else {
                     ContentUnavailableView(

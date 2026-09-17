@@ -12,7 +12,6 @@ struct GoogleMapView: UIViewRepresentable {
     final class Coordinator {
         var lastRecenterVersion = -1
         var lastDestinationID: String?
-        var lastRouteID: UUID?
     }
 
     /**
@@ -56,9 +55,7 @@ struct GoogleMapView: UIViewRepresentable {
             marker.map = uiView
         }
 
-        var routeBounds: GMSCoordinateBounds?
-        var routeChanged = false
-        if let route, let first = route.geometry.first {
+        if let route {
             let path = GMSMutablePath()
             route.geometry.forEach { path.add($0.locationCoordinate) }
             let polyline = GMSPolyline(path: path)
@@ -66,21 +63,6 @@ struct GoogleMapView: UIViewRepresentable {
             polyline.strokeWidth = 6
             polyline.zIndex = 1
             polyline.map = uiView
-
-            routeChanged = context.coordinator.lastRouteID != route.id
-            if routeChanged {
-                context.coordinator.lastRouteID = route.id
-                var bounds = GMSCoordinateBounds(
-                    coordinate: first.locationCoordinate,
-                    coordinate: first.locationCoordinate
-                )
-                route.geometry.dropFirst().forEach {
-                    bounds = bounds.includingCoordinate($0.locationCoordinate)
-                }
-                routeBounds = bounds
-            }
-        } else {
-            context.coordinator.lastRouteID = nil
         }
 
         if let coordinate,
@@ -95,15 +77,11 @@ struct GoogleMapView: UIViewRepresentable {
         guard destinationChanged else { return }
         context.coordinator.lastDestinationID = destination?.id
 
-        if let coordinate, let destination {
-            let bounds = GMSCoordinateBounds(coordinate: coordinate, coordinate: destination.coordinate.locationCoordinate)
-            uiView.animate(with: GMSCameraUpdate.fit(bounds, withPadding: 48))
-        } else if let destination {
-            uiView.animate(to: GMSCameraPosition(target: destination.coordinate.locationCoordinate, zoom: 16))
-        }
-
-        if routeChanged, let routeBounds {
-            uiView.animate(with: GMSCameraUpdate.fit(routeBounds, withPadding: 48))
+        if let destination {
+            uiView.animate(to: GMSCameraPosition(
+                target: destination.coordinate.locationCoordinate,
+                zoom: 16
+            ))
         }
     }
 }
