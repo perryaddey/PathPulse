@@ -1,0 +1,3 @@
+// Copy to Local.xcconfig (ignored by Git).
+// Restrict this key to the iOS bundle ID and Maps SDK + Places API (New).
+GOOGLE_MAPS_SDK_KEY = YOUR_RESTRICTED_IOS_SDK_KEY

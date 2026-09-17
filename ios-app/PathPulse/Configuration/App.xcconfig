@@ -1,0 +1,3 @@
+// Optional local overrides. See ios-app/README.md.
+GOOGLE_MAPS_SDK_KEY =
+#include? "Local.xcconfig"
