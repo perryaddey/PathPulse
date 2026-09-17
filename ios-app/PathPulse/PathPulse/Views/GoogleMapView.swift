@@ -1,13 +1,16 @@
 import SwiftUI
+import CoreLocation
 import GoogleMaps
 
 struct GoogleMapView: UIViewRepresentable {
     let coordinate: CLLocationCoordinate2D?
+    let destination: Destination?
     let isLocationEnabled: Bool
     let recenterVersion: Int
 
     final class Coordinator {
         var lastRecenterVersion = -1
+        var lastDestinationID: String?
     }
 
     /**
@@ -43,15 +46,31 @@ struct GoogleMapView: UIViewRepresentable {
      */
     func updateUIView(_ uiView: GMSMapView, context: Context) {
         uiView.isMyLocationEnabled = isLocationEnabled
+        uiView.clear()
+        if let destination {
+            let marker = GMSMarker(position: destination.coordinate.locationCoordinate)
+            marker.title = destination.name
+            marker.snippet = destination.address
+            marker.map = uiView
+        }
 
-        guard let coordinate,
-              context.coordinator.lastRecenterVersion != recenterVersion
-        else { return }
+        if let coordinate,
+           context.coordinator.lastRecenterVersion != recenterVersion {
+            context.coordinator.lastRecenterVersion = recenterVersion
+            uiView.animate(to: GMSCameraPosition(target: coordinate, zoom: 16))
+        }
 
-        context.coordinator.lastRecenterVersion = recenterVersion
-        uiView.animate(to: GMSCameraPosition(
-            target: coordinate,
-            zoom: 16
-        ))
+        let destinationChanged =
+            context.coordinator.lastDestinationID != destination?.id
+
+        guard destinationChanged else { return }
+        context.coordinator.lastDestinationID = destination?.id
+
+        if let coordinate, let destination {
+            let bounds = GMSCoordinateBounds(coordinate: coordinate, coordinate: destination.coordinate.locationCoordinate)
+            uiView.animate(with: GMSCameraUpdate.fit(bounds, withPadding: 48))
+        } else if let destination {
+            uiView.animate(to: GMSCameraPosition(target: destination.coordinate.locationCoordinate, zoom: 16))
+        }
     }
 }
