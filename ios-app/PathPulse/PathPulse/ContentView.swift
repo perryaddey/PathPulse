@@ -36,7 +36,16 @@ struct ContentView: View {
                             VStack(spacing: 8) {
                                 if destination == nil {
                                 TextField("Where do you want to go?", text: $query)
-                                    .textFieldStyle(.roundedBorder)
+                                    .textFieldStyle(.plain)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    .foregroundStyle(.white)
+                                    .background(PathPulseBrand.card)
+                                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 14)
+                                            .stroke(PathPulseBrand.accent.opacity(0.28), lineWidth: 1)
+                                    }
                                     .onChange(of: query) { _, value in
                                         search.search(query: value, origin: location.coordinate)
                                     }
@@ -99,6 +108,9 @@ struct ContentView: View {
                                 && scenePhase == .active,
                             recenterVersion: location.recenterVersion
                         )
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .padding(.horizontal)
+                        .padding(.vertical, 10)
 
                         if let walkingRoute {
                             if !isNavigationStarted {
@@ -163,7 +175,8 @@ struct ContentView: View {
                     )
                 }
             }
-            .navigationTitle("PathPulse")
+            .background(PathPulseBrand.background.ignoresSafeArea())
+            .navigationTitle("Navigation")
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 if mapsConfigured {

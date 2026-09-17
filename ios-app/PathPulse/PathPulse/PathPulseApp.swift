@@ -32,7 +32,8 @@ struct PathPulseApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(mapsConfigured: mapsConfigured)
+            HomeView(mapsConfigured: mapsConfigured)
+                .preferredColorScheme(.dark)
         }
     }
 }
