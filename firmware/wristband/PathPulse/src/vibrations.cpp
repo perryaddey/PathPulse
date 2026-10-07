@@ -51,6 +51,7 @@ void stopPlayback() {
 namespace Vibrations {
 /**
  * Initializes the driver and performs bounded startup calibration for the LRA.
+ * Logs the post-calibration status and fault bits; failures leave playback disabled.
  * @param sdaPin GPIO used for I2C data.
  * @param sclPin GPIO used for I2C clock.
  * @return True after successful calibration; false on initialization or driver failure.
@@ -92,7 +93,10 @@ bool begin(int sdaPin, int sclPin) {
     delay(10);
   }
   // DIAG_RESULT, overtemperature, or overcurrent must prevent playback.
-  if (hapticDriver.readRegister8(DRV2605_REG_STATUS) & 0x0B) {
+  const uint8_t status = hapticDriver.readRegister8(DRV2605_REG_STATUS);
+  Serial.printf("DRV2605L status: 0x%02X; diagnostic failure=%u, overtemperature=%u, overcurrent=%u\n",
+                status, (status >> 3) & 1, (status >> 1) & 1, status & 1);
+  if (status & 0x0B) {
     Serial.println("ERROR: Calibration failed or driver fault. Check motor connections.");
     return false;
   }

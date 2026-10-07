@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     let mapsConfigured: Bool
+    @State private var bluetooth = BluetoothService()
 
     var body: some View {
         NavigationStack {
@@ -47,10 +48,7 @@ struct HomeView: View {
                                 subtitle: "Connect your PathPulse wristbands",
                                 systemImage: "dot.radiowaves.left.and.right"
                             ) {
-                                PlaceholderView(
-                                    title: "Bluetooth",
-                                    message: "Wristband connection setup is coming next."
-                                )
+                                BluetoothView(bluetooth: bluetooth)
                             }
 
                             menuLink(
