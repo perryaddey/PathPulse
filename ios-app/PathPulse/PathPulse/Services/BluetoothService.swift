@@ -5,30 +5,63 @@ import Observation
 @Observable
 final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate,
     @preconcurrency CBPeripheralDelegate {
-    struct Device: Identifiable {
-        let id: UUID
-        let name: String
+    enum Wrist: String, CaseIterable, Identifiable {
+        case left = "Left", right = "Right"
+        var id: String { rawValue }
+        var deviceName: String { "PathPulse-\(rawValue)" }
     }
 
+    struct Device: Identifiable {
+        let id: UUID
+        let wrist: Wrist
+        var name: String { wrist.deviceName }
+    }
+
+    @Observable
+    final class Connection {
+        var status = "Scan to find this wristband."
+        var commandStatus: String?
+        var isReady = false
+        var hasConnection: Bool { peripheral != nil }
+        fileprivate var peripheral: CBPeripheral?
+        fileprivate var characteristic: CBCharacteristic?
+        fileprivate var timeout: Task<Void, Never>?
+    }
+
+    let left = Connection()
+    let right = Connection()
     private(set) var devices: [Device] = []
-    private(set) var status = "Tap Scan to find your left wristband."
+    private(set) var status = "Tap Scan to find your wristbands."
     private(set) var isScanning = false
-    private(set) var isReady = false
-    private(set) var hasConnection = false
-    private(set) var commandStatus: String?
 
     private let serviceID = CBUUID(string: "7ca10001-8e6b-4b2d-a9f0-6c3d52e18470")
     private let commandID = CBUUID(string: "7ca10002-8e6b-4b2d-a9f0-6c3d52e18470")
     private var central: CBCentralManager?
     private var peripherals: [UUID: CBPeripheral] = [:]
-    private var selected: CBPeripheral?
-    private var commandCharacteristic: CBCharacteristic?
     private var scanRequested = false
-    private var timeout: Task<Void, Never>?
+    private var scanTimeout: Task<Void, Never>?
+
+    /**
+     * Returns the independent state for a wrist.
+     * @param wrist The wrist whose connection is requested.
+     * @return Observable connection and command state.
+     */
+    func connection(for wrist: Wrist) -> Connection {
+        wrist == .left ? left : right
+    }
+
+    /**
+     * Finds the wrist owning a callback, ignoring peripherals no longer selected.
+     * @param peripheral The peripheral delivering a callback.
+     * @return Its assigned wrist, or nil for an obsolete callback.
+     */
+    private func wrist(for peripheral: CBPeripheral) -> Wrist? {
+        Wrist.allCases.first { connection(for: $0).peripheral === peripheral }
+    }
 
     /** Starts a bounded scan, requesting Bluetooth access on first use. */
     func scan() {
-        guard !hasConnection else { return }
+        guard !left.hasConnection || !right.hasConnection else { return }
         scanRequested = true
         if central == nil {
             central = CBCentralManager(delegate: self, queue: .main)
@@ -41,76 +74,98 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
         scanRequested = false
         devices = []
         peripherals = [:]
-        commandStatus = nil
         isScanning = true
-        status = "Searching for PathPulse-Left…"
+        status = "Searching for PathPulse wristbands…"
         central.scanForPeripherals(withServices: [serviceID])
-        timeout?.cancel()
-        timeout = Task { [weak self] in
+        scanTimeout?.cancel()
+        scanTimeout = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(10)) } catch { return }
             self?.stopScan()
         }
     }
 
-    /** Stops discovery and reports whether a left wristband was found. */
+    /** Stops shared discovery without affecting either connection. */
     func stopScan() {
         scanRequested = false
         guard isScanning else { return }
         central?.stopScan()
         isScanning = false
-        timeout?.cancel()
-        status = devices.isEmpty ? "No left wristband found. Check its power and scan again."
-            : "Select your left wristband to connect."
+        scanTimeout?.cancel()
+        status = devices.isEmpty ? "No wristbands found. Check their power and scan again."
+            : "Select a wristband to connect."
     }
 
     /**
-     * Connects to a discovered wristband and allows 15 seconds for service discovery.
-     * @param id The identifier of the selected wristband.
+     * Connects one wrist and allows 15 seconds for connection and service discovery.
+     * @param id The discovered peripheral identifier.
+     * @param wrist The wrist matching the advertised device name.
      */
-    func connect(to id: UUID) {
-        guard !hasConnection, central?.state == .poweredOn,
-              let peripheral = peripherals[id] else { return }
-        stopScan()
-        selected = peripheral
+    func connect(to id: UUID, wrist: Wrist) {
+        let connection = connection(for: wrist)
+        guard !connection.hasConnection, central?.state == .poweredOn,
+              devices.contains(where: { $0.id == id && $0.wrist == wrist }),
+              let peripheral = peripherals[id], peripheral.state == .disconnected,
+              self.wrist(for: peripheral) == nil else { return }
+        connection.peripheral = peripheral
         peripheral.delegate = self
-        hasConnection = true
-        commandStatus = nil
-        status = "Connecting to PathPulse-Left…"
+        connection.commandStatus = nil
+        connection.status = "Connecting to \(wrist.deviceName)…"
         central?.connect(peripheral)
-        timeout = Task { [weak self] in
+        connection.timeout = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
-            self?.disconnect(message: "Connection timed out. Scan and try again.")
+            self?.disconnect(wrist, message: "Connection timed out. Scan and try again.")
         }
+        if left.hasConnection && right.hasConnection { stopScan() }
     }
 
     /**
-     * Cancels a connection and clears command access; firmware stops on disconnect.
-     * @param message The connection status to display.
+     * Cancels only the selected wrist's connection; firmware stops on disconnect.
+     * @param wrist The wrist to disconnect.
+     * @param message The status to display for that wrist.
      */
-    func disconnect(message: String = "Disconnected.") {
-        timeout?.cancel()
-        if let selected { central?.cancelPeripheralConnection(selected) }
-        selected?.delegate = nil
-        selected = nil
-        commandCharacteristic = nil
-        isReady = false
-        hasConnection = false
-        commandStatus = nil
-        status = message
+    func disconnect(_ wrist: Wrist, message: String = "Disconnected.") {
+        let connection = connection(for: wrist)
+        if let peripheral = connection.peripheral {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        clear(wrist, message: message)
     }
 
     /**
-     * Writes a single binary manual-test or stop command with a GATT response.
-     * A response confirms the write, not motor playback. No commands are replayed.
-     * Command 6 is for manual testing only, not automatic navigation guidance.
-     * @param command A protocol command from 0 (stop) through 8 (obstacle warning).
+     * Clears one wrist's local state without changing the other connection or scan.
+     * @param wrist The wrist whose state is cleared.
+     * @param message The status to display.
      */
-    func send(_ command: UInt8) {
-        guard command <= 8, isReady,
-              let selected, selected.state == .connected,
-              let commandCharacteristic else { return }
-        commandStatus = command == 0 ? "Sending stop…" : "Sending test vibration…"
-        selected.writeValue(Data([command]), for: commandCharacteristic, type: .withResponse)
+    private func clear(_ wrist: Wrist, message: String) {
+        let connection = connection(for: wrist)
+        connection.timeout?.cancel()
+        connection.timeout = nil
+        connection.peripheral?.delegate = nil
+        connection.peripheral = nil
+        connection.characteristic = nil
+        connection.isReady = false
+        connection.commandStatus = nil
+        connection.status = message
+    }
+
+    /**
+     * Sends one binary manual-test command to one wrist, without replay or retries.
+     * A GATT response confirms receipt, not motor playback. Command 6 is manual only.
+     * @param command The protocol command from 0 through 8.
+     * @param wrist The recipient wrist.
+     */
+    func send(_ command: UInt8, to wrist: Wrist) {
+        let connection = connection(for: wrist)
+        guard command <= 8, connection.isReady,
+              let peripheral = connection.peripheral, peripheral.state == .connected,
+              let characteristic = connection.characteristic else { return }
+        connection.commandStatus = command == 0 ? "Sending stop…" : "Sending test vibration…"
+        peripheral.writeValue(Data([command]), for: characteristic, type: .withResponse)
+    }
+
+    /** Stops every ready wristband, including when only one wrist is connected. */
+    func stopAll() {
+        for wrist in Wrist.allCases { send(0, to: wrist) }
     }
 
     /**
@@ -122,18 +177,12 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
             if scanRequested { scan() } else { status = "Bluetooth ready. Tap Scan." }
             return
         }
-        timeout?.cancel()
+        scanTimeout?.cancel()
         isScanning = false
         devices = []
         peripherals = [:]
-        selected?.delegate = nil
-        selected = nil
-        commandCharacteristic = nil
-        isReady = false
-        hasConnection = false
-        commandStatus = nil
         switch central.state {
-        case .poweredOff: status = "Turn on Bluetooth to connect your wristband."
+        case .poweredOff: status = "Turn on Bluetooth to connect your wristbands."
         case .unauthorized:
             scanRequested = false
             status = "Allow Bluetooth access for PathPulse in Settings."
@@ -143,10 +192,11 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
         case .resetting: status = "Bluetooth is restarting…"
         default: status = "Waiting for Bluetooth…"
         }
+        for wrist in Wrist.allCases { clear(wrist, message: status) }
     }
 
     /**
-     * Lists matching left wristbands once per identifier.
+     * Lists exact left/right advertised names once per identifier.
      * @param central The scanning manager.
      * @param peripheral The discovered wristband.
      * @param advertisementData Advertised service and local-name data.
@@ -156,9 +206,10 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard isScanning else { return }
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name
-        guard name == "PathPulse-Left", peripherals[peripheral.identifier] == nil else { return }
+        guard let wrist = Wrist.allCases.first(where: { $0.deviceName == name }),
+              peripherals[peripheral.identifier] == nil else { return }
         peripherals[peripheral.identifier] = peripheral
-        devices.append(Device(id: peripheral.identifier, name: "PathPulse-Left"))
+        devices.append(Device(id: peripheral.identifier, wrist: wrist))
     }
 
     /**
@@ -167,8 +218,8 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      * @param peripheral The connected wristband.
      */
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard peripheral === selected else { return }
-        status = "Checking wristband service…"
+        guard let wrist = wrist(for: peripheral) else { return }
+        connection(for: wrist).status = "Checking wristband service…"
         peripheral.discoverServices([serviceID])
     }
 
@@ -180,8 +231,8 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      */
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
-        guard peripheral === selected else { return }
-        disconnect(message: error?.localizedDescription ?? "Connection failed. Try again.")
+        guard let wrist = wrist(for: peripheral) else { return }
+        disconnect(wrist, message: error?.localizedDescription ?? "Connection failed. Try again.")
     }
 
     /**
@@ -192,8 +243,8 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      */
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
-        guard peripheral === selected else { return }
-        disconnect(message: error?.localizedDescription ?? "Wristband disconnected. Scan to reconnect.")
+        guard let wrist = wrist(for: peripheral) else { return }
+        disconnect(wrist, message: error?.localizedDescription ?? "Wristband disconnected. Scan to reconnect.")
     }
 
     /**
@@ -202,9 +253,9 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      * @param error The service discovery error, if supplied.
      */
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard peripheral === selected else { return }
+        guard let wrist = wrist(for: peripheral) else { return }
         guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == serviceID }) else {
-            disconnect(message: "Could not find the wristband service. Try reconnecting.")
+            disconnect(wrist, message: "Could not find the wristband service. Try reconnecting.")
             return
         }
         peripheral.discoverCharacteristics([commandID], for: service)
@@ -218,17 +269,19 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      */
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
-        guard peripheral === selected else { return }
+        guard let wrist = wrist(for: peripheral) else { return }
         guard error == nil, let characteristic = service.characteristics?.first(where: {
             $0.uuid == commandID && $0.properties.contains(.write)
         }) else {
-            disconnect(message: "Wristband command service is unavailable. Try reconnecting.")
+            disconnect(wrist, message: "Wristband command service is unavailable. Try reconnecting.")
             return
         }
-        timeout?.cancel()
-        commandCharacteristic = characteristic
-        isReady = true
-        status = "Connected to PathPulse-Left."
+        let connection = connection(for: wrist)
+        connection.timeout?.cancel()
+        connection.timeout = nil
+        connection.characteristic = characteristic
+        connection.isReady = true
+        connection.status = "Connected to \(wrist.deviceName)."
     }
 
     /**
@@ -239,8 +292,8 @@ final class BluetoothService: NSObject, @preconcurrency CBCentralManagerDelegate
      */
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
-        guard peripheral === selected, characteristic.uuid == commandID else { return }
-        commandStatus = error.map { "Command failed: \($0.localizedDescription)" }
+        guard let wrist = wrist(for: peripheral), characteristic === connection(for: wrist).characteristic else { return }
+        connection(for: wrist).commandStatus = error.map { "Command failed: \($0.localizedDescription)" }
             ?? "Command delivered."
     }
 }

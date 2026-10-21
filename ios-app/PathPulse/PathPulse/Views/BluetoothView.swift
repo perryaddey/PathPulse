@@ -6,38 +6,36 @@ struct BluetoothView: View {
 
     var body: some View {
         List {
-            Section("Left wristband") {
+            Section("Discovery") {
                 Text(bluetooth.status)
-                if bluetooth.hasConnection {
-                    Button("Disconnect", role: .destructive) { bluetooth.disconnect() }
-                } else if bluetooth.isScanning {
+                if bluetooth.isScanning {
                     Button("Stop scanning") { bluetooth.stopScan() }
                 } else {
-                    Button("Scan for wristband") { bluetooth.scan() }
+                    Button("Scan for wristbands") { bluetooth.scan() }
+                        .disabled(bluetooth.left.hasConnection && bluetooth.right.hasConnection)
                 }
             }
-            if !bluetooth.hasConnection && !bluetooth.devices.isEmpty {
-                Section("Available wristbands") {
-                    ForEach(bluetooth.devices) { device in
-                        Button {
-                            bluetooth.connect(to: device.id)
-                        } label: {
-                            Label("Connect \(device.name)", systemImage: "link")
+            ForEach(BluetoothService.Wrist.allCases) { wrist in
+                let connection = bluetooth.connection(for: wrist)
+                Section("\(wrist.rawValue) wristband") {
+                    Text(connection.status)
+                    if connection.hasConnection {
+                        Button("Disconnect", role: .destructive) { bluetooth.disconnect(wrist) }
+                    } else {
+                        ForEach(bluetooth.devices.filter { $0.wrist == wrist }) { device in
+                            Button("Connect \(device.name)") {
+                                bluetooth.connect(to: device.id, wrist: wrist)
+                            }
                         }
                     }
+                    Button("Test \(wrist.rawValue.lowercased()) vibration") { bluetooth.send(1, to: wrist) }
+                        .disabled(!connection.isReady)
+                    Button("Stop \(wrist.rawValue.lowercased()) vibration") { bluetooth.send(0, to: wrist) }
+                        .disabled(!connection.isReady)
+                    if let message = connection.commandStatus { Text(message) }
                 }
             }
-            Section {
-                Button("Test vibration") { bluetooth.send(1) }
-                    .disabled(!bluetooth.isReady)
-                Button("Stop vibration") { bluetooth.send(0) }
-                    .disabled(!bluetooth.isReady)
-                if let message = bluetooth.commandStatus { Text(message) }
-            } header: {
-                Text("Vibration controls")
-            } footer: {
-                Text("Test plays two short pulses on the left wristband.")
-            }
+
         }
         .scrollContentBackground(.hidden)
         .background(PathPulseBrand.background)
