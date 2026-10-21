@@ -9,7 +9,10 @@
 #include <freertos/queue.h>
 
 namespace {
-constexpr char kDeviceName[] = "PathPulse-Left";
+#ifndef PATHPULSE_DEVICE_NAME
+#define PATHPULSE_DEVICE_NAME "PathPulse-Left"
+#endif
+constexpr char kDeviceName[] = PATHPULSE_DEVICE_NAME;
 constexpr char kServiceUUID[] = "7ca10001-8e6b-4b2d-a9f0-6c3d52e18470";
 constexpr char kCommandUUID[] = "7ca10002-8e6b-4b2d-a9f0-6c3d52e18470";
 // Transport handoff only: commands never wait for a vibration pattern to finish.
@@ -70,7 +73,7 @@ CommandCallbacks commandCallbacks;
 
 namespace WristbandBLE {
 /**
- * Allocates the command buffer and advertises the writable haptic service.
+ * Allocates the command buffer and advertises the haptic service using the build-configured name.
  * The full device name uses the scan response so the 128-bit service UUID fits.
  * @return Whether the command buffer was allocated and BLE initialization completed.
  */
@@ -98,7 +101,7 @@ bool begin() {
   advertising->setScanResponseData(scanResponse);
   advertising->setScanResponse(true);
   advertising->start();
-  Serial.println("BLE advertising as PathPulse-Left.");
+  Serial.printf("BLE advertising as %s.\n", kDeviceName);
   return true;
 }
 
