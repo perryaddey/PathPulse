@@ -7,13 +7,10 @@ namespace {
 constexpr uint8_t kFullStrength = 0x7F;
 constexpr uint32_t kGapMs = 200;
 constexpr uint32_t kFaultCheckMs = 50;
-// NFP-ELV959535: 0.9 Vrms, 170 Hz. TI DRV2605L datasheet sections 8.5.2–8.5.3.
-// At SAMPLE_TIME=300 us: floor(0.9 * sqrt(1 - 0.0015 * 170) / 0.02058).
-constexpr uint8_t kRatedVoltage = 37;
-// Conservative peak clamp: floor(0.9 * sqrt(2) / 0.02122), no extra overdrive.
-constexpr uint8_t kVoltageClamp = 59;
-// Half-period is 2.94 ms; DRIVE_TIME uses 0.5 ms + value * 0.1 ms.
-constexpr uint8_t kDriveTime = 24;
+// Match the verified diagnostic setup: 0.64 V nominal peak at approximately 169 Hz.
+constexpr uint8_t kVoltageClamp = 30;
+constexpr uint8_t kOpenLoopPeriod = 60;
+constexpr uint8_t kStandbyMode = 0x40;
 Adafruit_DRV2605 hapticDriver;
 bool driverReady = false;
 
@@ -46,15 +43,48 @@ void stopPlayback() {
   pulseOn = false;
   pulseIndex = 0;
 }
+
+/**
+ * Reads a driver register with explicit I2C error detection.
+ * @param address Register address on the DRV2605L at I2C address 0x5A.
+ * @param value Destination for the byte read; unchanged on failure.
+ * @return Whether the register address and byte were transferred successfully.
+ */
+bool readChecked(uint8_t address, uint8_t &value) {
+  Wire.beginTransmission(0x5A);
+  Wire.write(address);
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(uint8_t(0x5A), uint8_t(1)) != 1) {
+    Serial.printf("ERROR: I2C read failed at register 0x%02X.\n", address);
+    return false;
+  }
+  value = Wire.read();
+  return true;
+}
+
+/**
+ * Logs a configuration register and compares its relevant bits with expectations.
+ * @param address Register address to read.
+ * @param expected Expected configured value before calibration.
+ * @param mask Bits to compare, excluding reserved bits.
+ * @return Whether the read succeeded and all selected bits matched.
+ */
+bool verifyRegister(uint8_t address, uint8_t expected, uint8_t mask) {
+  uint8_t actual = 0;
+  if (!readChecked(address, actual)) { return false; }
+  const bool matches = (actual & mask) == (expected & mask);
+  Serial.printf("Config 0x%02X = 0x%02X; expected 0x%02X mask 0x%02X: %s\n",
+                address, actual, expected, mask, matches ? "OK" : "MISMATCH");
+  return matches;
+}
 }
 
 namespace Vibrations {
 /**
- * Initializes the driver and performs bounded startup calibration for the LRA.
- * Logs the post-calibration status and fault bits; failures leave playback disabled.
+ * Initializes the LRA in fixed-frequency open-loop RTP mode without calibration.
+ * This matches the low-voltage configuration that produced a confirmed motor pulse.
  * @param sdaPin GPIO used for I2C data.
  * @param sclPin GPIO used for I2C clock.
- * @return True after successful calibration; false on initialization or driver failure.
+ * @return True when configuration and driver checks pass; false on initialization or driver failure.
  */
 bool begin(int sdaPin, int sclPin) {
   driverReady = false;
@@ -69,40 +99,56 @@ bool begin(int sdaPin, int sclPin) {
     return false;
   }
 
-  hapticDriver.useLRA();
-  hapticDriver.stop();
-  hapticDriver.writeRegister8(DRV2605_REG_RATEDV, kRatedVoltage);
-  hapticDriver.writeRegister8(DRV2605_REG_CLAMPV, kVoltageClamp);
-  hapticDriver.writeRegister8(DRV2605_REG_CONTROL1,
-      (hapticDriver.readRegister8(DRV2605_REG_CONTROL1) & 0xE0) | kDriveTime);
-  hapticDriver.writeRegister8(DRV2605_REG_CONTROL2, 0xF5); // 300 us sampling.
-  hapticDriver.writeRegister8(DRV2605_REG_CONTROL3,
-      hapticDriver.readRegister8(DRV2605_REG_CONTROL3) & ~0x29); // Closed loop, signed RTP.
-  hapticDriver.writeRegister8(DRV2605_REG_CONTROL4,
-      (hapticDriver.readRegister8(DRV2605_REG_CONTROL4) & 0xCF) | 0x30);
-  hapticDriver.setMode(DRV2605_MODE_AUTOCAL);
-  Serial.println("Calibrating NFP-ELV959535...");
-  hapticDriver.go();
-  const uint32_t calibrationStart = millis();
-  while (hapticDriver.readRegister8(DRV2605_REG_GO) & 0x01) {
-    if (millis() - calibrationStart >= 2000) {
-      hapticDriver.stop();
-      Serial.println("ERROR: Calibration timed out. Check driver and motor wiring.");
+  // An ESP32 reset does not necessarily power-cycle the separately powered driver.
+  // DEV_RESET restores volatile registers; it does not program OTP memory.
+  hapticDriver.writeRegister8(DRV2605_REG_MODE, 0x80);
+  const uint32_t resetStart = millis();
+  uint8_t mode = 0x80;
+  do {
+    delay(1);
+    if (!readChecked(DRV2605_REG_MODE, mode)) { return false; }
+    if (millis() - resetStart >= 500) {
+      Serial.println("ERROR: Driver reset timed out.");
       return false;
     }
-    delay(10);
+  } while (mode & 0x80);
+  Serial.println("DRV2605L reset complete.");
+  if (!hapticDriver.begin(&Wire)) {
+    Serial.println("ERROR: Driver unavailable after reset.");
+    return false;
   }
-  // DIAG_RESULT, overtemperature, or overcurrent must prevent playback.
-  const uint8_t status = hapticDriver.readRegister8(DRV2605_REG_STATUS);
-  Serial.printf("DRV2605L status: 0x%02X; diagnostic failure=%u, overtemperature=%u, overcurrent=%u\n",
-                status, (status >> 3) & 1, (status >> 1) & 1, status & 1);
-  if (status & 0x0B) {
-    Serial.println("ERROR: Calibration failed or driver fault. Check motor connections.");
+
+  hapticDriver.stop();
+  hapticDriver.setMode(kStandbyMode);
+  hapticDriver.writeRegister8(DRV2605_REG_CLAMPV, kVoltageClamp);
+  hapticDriver.writeRegister8(DRV2605_REG_FEEDBACK, 0xB6); // LRA mode.
+  hapticDriver.writeRegister8(0x1C, 0xF5); // Bidirectional input for signed RTP.
+  hapticDriver.writeRegister8(DRV2605_REG_CONTROL3, 0x81); // Open-loop LRA, RTP, supply compensation.
+  hapticDriver.writeRegister8(0x20, kOpenLoopPeriod);
+  bool configurationOK = true;
+  configurationOK &= verifyRegister(DRV2605_REG_CLAMPV, kVoltageClamp, 0xFF);
+  configurationOK &= verifyRegister(DRV2605_REG_FEEDBACK, 0xB6, 0xFF);
+  configurationOK &= verifyRegister(0x1C, 0xF5, 0xFF);
+  configurationOK &= verifyRegister(DRV2605_REG_CONTROL3, 0x81, 0xFF);
+  configurationOK &= verifyRegister(0x20, kOpenLoopPeriod, 0x7F);
+  configurationOK &= verifyRegister(DRV2605_REG_MODE, kStandbyMode, 0xC7);
+  if (!configurationOK) {
+    hapticDriver.stop();
+    hapticDriver.writeRegister8(DRV2605_REG_MODE, 0x40); // STANDBY, no playback.
+    Serial.println("ERROR: Open-loop configuration verification failed.");
+    return false;
+  }
+  uint8_t status = 0;
+  if (!readChecked(DRV2605_REG_STATUS, status)) { return false; }
+  if ((status & 0xE0) != 0xE0 || (status & 0x03)) {
+    Serial.printf("ERROR: DRV2605L identity or fault check failed (status 0x%02X).\n", status);
     return false;
   }
   hapticDriver.setRealtimeValue(0);
   hapticDriver.setMode(DRV2605_MODE_REALTIME);
   driverReady = true;
+  Serial.printf("Open-loop haptics ready: approximately %.1f Hz, 0.64 V peak clamp.\n",
+                1000000.0 / (kOpenLoopPeriod * 98.46));
   return true;
 }
 
@@ -125,7 +171,7 @@ bool play(uint8_t command) {
   stopPlayback();
   activeCommand = command;
   phaseStartMs = millis();
-  lastFaultCheckMs = phaseStartMs - kFaultCheckMs;
+  lastFaultCheckMs = phaseStartMs;
   pulseOn = true;
   hapticDriver.setRealtimeValue(kFullStrength);
   return true;
@@ -133,7 +179,7 @@ bool play(uint8_t command) {
 
 /**
  * Advances a single pulse/gap phase using rollover-safe elapsed milliseconds.
- * Checks faults every 50 ms during playback and disables output on a fault.
+ * Checks faults every 50 ms during playback, beginning 50 ms after the first pulse starts.
  * Late calls preserve a full off gap instead of rushing overdue pulses together.
  */
 void update() {
@@ -143,11 +189,12 @@ void update() {
   const uint32_t now = millis();
   if (now - lastFaultCheckMs >= kFaultCheckMs) {
     lastFaultCheckMs = now;
-    if (hapticDriver.readRegister8(DRV2605_REG_STATUS) & 0x03) {
+    const uint8_t status = hapticDriver.readRegister8(DRV2605_REG_STATUS);
+    if (status & 0x03) {
       stopPlayback();
-      hapticDriver.setMode(DRV2605_MODE_INTTRIG);
+      hapticDriver.setMode(kStandbyMode);
       driverReady = false;
-      Serial.println("ERROR: Driver temperature/current fault. Reset required.");
+      Serial.printf("ERROR: Driver temperature/current fault (status 0x%02X). Reset required.\n", status);
       return;
     }
   }

@@ -3,10 +3,10 @@
 
 namespace Vibrations {
 /**
- * Initializes I2C and calibrates the NFP-ELV959535 motor; may vibrate during startup.
+ * Initializes I2C and configures fixed-frequency open-loop drive for the LRA.
  * @param sdaPin GPIO connected to the driver's SDA pin.
  * @param sclPin GPIO connected to the driver's SCL pin.
- * @return Whether the driver is ready for pattern playback.
+ * @return True when the driver passed identity/fault checks and is ready to play.
  */
 bool begin(int sdaPin, int sclPin);
 

@@ -6,7 +6,7 @@ constexpr int kSdaPin = 4;
 constexpr int kSclPin = 5;
 }
 
-/** Starts serial pattern testing and calibrates the haptic driver on GPIO 4/5. */
+/** Starts serial pattern testing and configures the haptic driver on GPIO 4/5. */
 void setup() {
   Serial.begin(115200);
   delay(1000);
