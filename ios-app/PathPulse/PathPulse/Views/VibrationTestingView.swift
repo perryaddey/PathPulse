@@ -3,6 +3,12 @@ import SwiftUI
 struct VibrationTestingView: View {
     let bluetooth: BluetoothService
     @State private var recipient = Recipient.left
+    @State private var trialTask: Task<Void, Never>?
+    @State private var trialRunID: UUID?
+    @State private var trialSequence: [BluetoothService.Wrist] = []
+    @State private var trialNumber = 0
+    @State private var currentTrialWrist: BluetoothService.Wrist?
+    @State private var trialStatus = "Ready to run 100 trials."
 
     private enum Recipient: String, CaseIterable, Identifiable {
         case left = "Left", right = "Right", both = "Both"
@@ -32,6 +38,7 @@ struct VibrationTestingView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .disabled(trialTask != nil)
                     ForEach(recipient.wrists) { wrist in
                         Text("\(wrist.rawValue): \(bluetooth.connection(for: wrist).status)")
                     }
@@ -51,6 +58,38 @@ struct VibrationTestingView: View {
                     cueButton("Arrived", detail: "200 ms, 200 ms, then 800 ms", icon: "mappin.circle", command: 4)
                     cueButton("Guidance unavailable", detail: "800 ms, then two 200 ms pulses", icon: "location.slash", command: 7)
                     cueButton("Obstacle warning", detail: "Five 200 ms pulses", icon: "exclamationmark.triangle", command: 8)
+                }
+
+                if recipient == .both {
+                    Section("Left / right motor check") {
+                        Text(trialStatus)
+                        if let currentTrialWrist, trialTask != nil {
+                            Text("Trial \(trialNumber) of 100 · target: \(currentTrialWrist.rawValue)")
+                                .font(.headline)
+                        }
+                        Text("Sends command 1 to 50 randomly ordered trials on each wristband, with 3–6 seconds between cues. Record which wrist you feel for each trial.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if trialTask == nil {
+                            Button {
+                                startLeftRightTrials()
+                            } label: {
+                                Label("Start 100-trial check", systemImage: "play.fill")
+                            }
+                            .disabled(!bluetooth.left.isReady || !bluetooth.right.isReady)
+                        } else {
+                            Button(role: .destructive) {
+                                stopLeftRightTrials()
+                            } label: {
+                                Label("Stop trial run", systemImage: "stop.fill")
+                            }
+                        }
+                        if !bluetooth.left.isReady || !bluetooth.right.isReady {
+                            Text("Connect both wristbands to start this check.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section {
@@ -75,7 +114,11 @@ struct VibrationTestingView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    bluetooth.stopAll()
+                    if trialTask != nil {
+                        stopLeftRightTrials()
+                    } else {
+                        bluetooth.stopAll()
+                    }
                 } label: {
                     Label("Stop all connected wristbands", systemImage: "stop.fill")
                         .frame(maxWidth: .infinity)
@@ -88,6 +131,61 @@ struct VibrationTestingView: View {
             }
         }
         .tint(PathPulseBrand.accent)
+        .onDisappear { stopLeftRightTrials() }
+    }
+
+    /**
+     * Starts 100 command-1 trials with an equal, shuffled split between wristbands.
+     */
+    private func startLeftRightTrials() {
+        guard trialTask == nil, bluetooth.left.isReady, bluetooth.right.isReady else { return }
+        trialSequence = (Array(repeating: BluetoothService.Wrist.left, count: 50)
+            + Array(repeating: BluetoothService.Wrist.right, count: 50)).shuffled()
+        trialNumber = 0
+        currentTrialWrist = nil
+        trialStatus = "Running. Record the wrist that actually vibrates."
+        let sequence = trialSequence
+        let runID = UUID()
+        trialRunID = runID
+        trialTask = Task { @MainActor in
+            for (index, wrist) in sequence.enumerated() {
+                guard !Task.isCancelled else { break }
+                guard bluetooth.left.isReady, bluetooth.right.isReady else {
+                    trialStatus = "Stopped because a wristband disconnected."
+                    break
+                }
+                trialNumber = index + 1
+                currentTrialWrist = wrist
+                bluetooth.send(1, to: wrist)
+                if index < sequence.count - 1 {
+                    do {
+                        try await Task.sleep(for: .seconds(Int.random(in: 3...6)))
+                    } catch {
+                        break
+                    }
+                }
+            }
+            guard trialRunID == runID else { return }
+            if !Task.isCancelled, trialNumber == sequence.count {
+                trialStatus = "Complete: 50 left and 50 right commands sent."
+            }
+            currentTrialWrist = nil
+            trialTask = nil
+            trialRunID = nil
+        }
+    }
+
+    /**
+     * Stops the randomized motor check and sends stop commands to both wristbands.
+     */
+    private func stopLeftRightTrials() {
+        guard let task = trialTask else { return }
+        task.cancel()
+        trialTask = nil
+        trialRunID = nil
+        currentTrialWrist = nil
+        trialStatus = "Stopped after trial \(trialNumber) of 100."
+        bluetooth.stopAll()
     }
 
     /**
@@ -117,7 +215,7 @@ struct VibrationTestingView: View {
             }
             .padding(.vertical, 4)
         }
-        .disabled(!recipientsReady)
+        .disabled(!recipientsReady || trialTask != nil)
         .accessibilityElement(children: .combine)
     }
 }

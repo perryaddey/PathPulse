@@ -1,10 +1,14 @@
 # Wristband haptic command protocol
 
 Agreed command mapping, September 30, 2026. Patterns are implemented in
-`firmware/wristband/PathPulse/src/vibrations.cpp`; the BLE receiver is not implemented yet.
+`firmware/wristband/PathPulse/src/vibrations.cpp`; the BLE receiver accepts these
+single-byte commands through its writable GATT characteristic.
 
 The iOS app selects the recipient wristband. Both wristbands use identical
-firmware and the same command numbers; neither needs a left/right role in firmware.
+pattern implementation and command numbers. The default build advertises as
+`PathPulse-Left`; the `wristband-right` build advertises as `PathPulse-Right`.
+The app uses these exact names to associate connections with wrists; the firmware
+does not interpret commands differently by side.
 For bilateral cues, the app sends a separate command to each wristband. These
 writes do not guarantee precisely synchronized playback.
 
@@ -47,13 +51,13 @@ Examples: a left turn sends `0x01` only to the left wristband. Arrival sends
 - Driver temperature/current faults stop playback and require a board reset.
 - Playback uses non-blocking timing; startup calibration is bounded but blocking.
 
-## Bench testing before BLE
+## Serial bench testing
 
 Build and upload the `vibration-test` PlatformIO environment, then open Serial
 Monitor at 115200 baud and type one digit `0` through `8`. The interactive entry
 point is `src/vibration_test.cpp`; the default firmware excludes it.
-This serial-only adapter converts ASCII digits to binary command IDs; the future
-BLE protocol still uses one binary byte. Newlines are ignored. No pattern plays
+This serial-only adapter converts ASCII digits to binary command IDs; the BLE
+protocol uses one binary byte. Newlines are ignored. No pattern plays
 automatically after calibration. Command `6` is available for bench testing but
 remains reserved for app use until walking turn-around detection is implemented.
 
