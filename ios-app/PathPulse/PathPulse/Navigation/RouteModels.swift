@@ -36,11 +36,13 @@ struct RouteManeuver: Equatable, Sendable {
         case left, right, straight, other
     }
 
-    // Only exact basic maneuvers are categorized here. This is not a haptic policy.
+    // Display-only direction grouping; haptic support is decided by NavigationCueMapper.
     var direction: Direction {
         switch rawValue {
-        case "TURN_LEFT": .left
-        case "TURN_RIGHT": .right
+        case "TURN_LEFT", "TURN_SLIGHT_LEFT", "TURN_SHARP_LEFT", "FORK_LEFT",
+             "RAMP_LEFT", "ROUNDABOUT_LEFT", "UTURN_LEFT": .left
+        case "TURN_RIGHT", "TURN_SLIGHT_RIGHT", "TURN_SHARP_RIGHT", "FORK_RIGHT",
+             "RAMP_RIGHT", "ROUNDABOUT_RIGHT", "UTURN_RIGHT": .right
         case "STRAIGHT": .straight
         default: .other
         }

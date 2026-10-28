@@ -40,7 +40,7 @@ struct HomeView: View {
                                 subtitle: "Plan a route and follow each step",
                                 systemImage: "arrow.triangle.turn.up.right.diamond"
                             ) {
-                                ContentView(mapsConfigured: mapsConfigured)
+                                ContentView(mapsConfigured: mapsConfigured, bluetooth: bluetooth)
                             }
 
                             menuLink(

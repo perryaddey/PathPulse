@@ -9,9 +9,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private(set) var message: String?
     private(set) var isAuthorized = false
     private(set) var recenterVersion = 0
+    private(set) var navigationFixVersion = 0
+    private(set) var latestLocation: CLLocation?
 
     private let manager = CLLocationManager()
     private var hasRequestedLocation = false
+    private var navigationUpdatesRequested = false
 
     /**
      * Configures foreground location requests without prompting for permission.
@@ -20,6 +23,44 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+    }
+
+    /**
+     * Starts continuous foreground fixes for an active navigation trial.
+     * Requests When In Use authorization if location access has not been decided.
+     */
+    func startNavigationUpdates() {
+        navigationUpdatesRequested = true
+        hasRequestedLocation = false
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            isAuthorized = true
+            message = nil
+            manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+            manager.distanceFilter = 1
+            manager.activityType = .fitness
+            manager.pausesLocationUpdatesAutomatically = false
+            manager.startUpdatingLocation()
+        case .denied:
+            isAuthorized = false
+            message = "Allow location access while using PathPulse to follow the route."
+        case .restricted:
+            isAuthorized = false
+            message = "Location access is restricted on this device."
+        @unknown default:
+            isAuthorized = false
+            message = "Location access is unavailable."
+        }
+    }
+
+    /** Stops continuous route fixes and restores the map's lower-power settings. */
+    func stopNavigationUpdates() {
+        navigationUpdatesRequested = false
+        manager.stopUpdatingLocation()
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.distanceFilter = kCLDistanceFilterNone
     }
 
     /**
@@ -72,9 +113,14 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         if !isAuthorized {
             coordinate = nil
             isLoading = false
+            if navigationUpdatesRequested {
+                message = "Allow location access while using PathPulse to follow the route."
+            }
         }
 
-        if hasRequestedLocation {
+        if navigationUpdatesRequested && isAuthorized {
+            startNavigationUpdates()
+        } else if hasRequestedLocation {
             requestLocation()
         }
     }
@@ -103,8 +149,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
 
         coordinate = location.coordinate
+        latestLocation = location
         message = nil
-        recenterVersion += 1
+        if navigationUpdatesRequested {
+            navigationFixVersion += 1
+        } else {
+            recenterVersion += 1
+        }
     }
 
     /**

@@ -2,6 +2,9 @@ import SwiftUI
 
 struct RouteDirectionsView: View {
     let route: WalkingRoute
+    let guidanceStatus: String
+    let nextInstruction: String
+    let locationMessage: String?
     let onEnd: () -> Void
 
     var body: some View {
@@ -17,7 +20,27 @@ struct RouteDirectionsView: View {
             .padding()
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(guidanceStatus)
+                            .font(.headline)
+                        if !nextInstruction.isEmpty {
+                            Text(nextInstruction)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let locationMessage {
+                            Text(locationMessage)
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("Keep PathPulse open in the foreground during this field test.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+
                     ForEach(route.steps) { step in
                         HStack(alignment: .top, spacing: 12) {
                             Image(systemName: stepIcon(for: step.maneuver.direction))

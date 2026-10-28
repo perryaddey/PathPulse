@@ -6,11 +6,15 @@
 //
 
 import SwiftUI
+import CoreLocation
 
 struct ContentView: View {
     let mapsConfigured: Bool
+    let bluetooth: BluetoothService
 
     @State private var location = LocationService()
+    @State private var guidance = NavigationGuidanceSession()
+    @State private var rerouteTask: Task<Void, Never>?
     @State private var search = DestinationSearchService()
     @State private var routeService = GoogleWalkingRouteService(
         key: Bundle.main.object(forInfoDictionaryKey: "GoogleMapsSDKKey") as? String
@@ -28,8 +32,11 @@ struct ContentView: View {
             Group {
                 if mapsConfigured {
                     if isNavigationStarted, let walkingRoute {
-                        RouteDirectionsView(route: walkingRoute) {
-                            isNavigationStarted = false
+                        RouteDirectionsView(route: walkingRoute,
+                                            guidanceStatus: guidance.status,
+                                            nextInstruction: guidance.nextInstruction,
+                                            locationMessage: location.message) {
+                            endNavigation()
                         }
                     } else {
                         VStack(spacing: 0) {
@@ -122,12 +129,27 @@ struct ContentView: View {
                                     .font(.callout)
 
                                     Button {
-                                        isNavigationStarted = true
+                                        startNavigation(for: walkingRoute)
                                     } label: {
                                         Label("Start", systemImage: "play.fill")
                                             .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(.borderedProminent)
+
+                                    if !bluetooth.left.isReady || !bluetooth.right.isReady {
+                                        NavigationLink {
+                                            BluetoothView(bluetooth: bluetooth)
+                                        } label: {
+                                            Label("Connect both wristbands", systemImage: "dot.radiowaves.left.and.right")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                    if let routeMessage {
+                                        Text(routeMessage)
+                                            .font(.callout)
+                                            .multilineTextAlignment(.center)
+                                    }
                                 }
                                 .padding(.horizontal)
                                 .padding(.vertical, 10)
@@ -188,16 +210,89 @@ struct ContentView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if mapsConfigured && phase == .active {
-                    location.requestLocation()
+                    if isNavigationStarted {
+                        location.startNavigationUpdates()
+                    } else {
+                        location.requestLocation()
+                    }
                 }
+            }
+            .onChange(of: location.navigationFixVersion) { _, _ in
+                guard isNavigationStarted, let fix = location.latestLocation else { return }
+                if let origin = guidance.update(location: fix, bluetooth: bluetooth) {
+                    requestReroute(from: origin)
+                }
+            }
+            .onChange(of: bluetooth.left.isReady) { _, _ in
+                guidance.checkConnections(bluetooth: bluetooth)
+            }
+            .onChange(of: bluetooth.right.isReady) { _, _ in
+                guidance.checkConnections(bluetooth: bluetooth)
             }
         }
     }
 
     private var routeRequestID: String {
+        if isNavigationStarted {
+            return "active:\(destination?.id ?? "none")"
+        }
+        if let walkingRoute {
+            return "\(walkingRoute.destination.id):\(walkingRoute.origin.latitude):\(walkingRoute.origin.longitude)"
+        }
         guard let destination else { return "none" }
         let coordinate = location.coordinate
         return "\(destination.id):\(coordinate?.latitude ?? 0):\(coordinate?.longitude ?? 0)"
+    }
+
+    /**
+     * Starts navigation only when both wristbands and route tracking are ready.
+     * @param route The walking route to follow.
+     */
+    private func startNavigation(for route: WalkingRoute) {
+        routeMessage = nil
+        guard guidance.start(route: route, bluetooth: bluetooth) else {
+            routeMessage = guidance.status
+            return
+        }
+        isNavigationStarted = true
+        location.startNavigationUpdates()
+    }
+
+    /** Stops location updates and wristband playback when navigation ends. */
+    private func endNavigation() {
+        rerouteTask?.cancel()
+        rerouteTask = nil
+        location.stopNavigationUpdates()
+        guidance.stop(bluetooth: bluetooth)
+        isNavigationStarted = false
+    }
+
+    /**
+     * Requests a replacement walking route from a confirmed off-route location.
+     * @param origin The latest usable user coordinate.
+     */
+    private func requestReroute(from origin: Coordinate) {
+        guard let destination, isNavigationStarted else { return }
+        rerouteTask?.cancel()
+        rerouteTask = Task {
+            do {
+                let updatedRoute = try await routeService.route(from: origin, to: destination)
+                guard !Task.isCancelled, isNavigationStarted else { return }
+                walkingRoute = updatedRoute
+                _ = guidance.completeReroute(with: updatedRoute, bluetooth: bluetooth)
+                routeMessage = nil
+                rerouteTask = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                let detail = (error as? LocalizedError)?.errorDescription
+                    ?? "The route request failed."
+                guidance.failReroute(message: "Couldn't reroute. Guidance paused. \(detail)",
+                                     bluetooth: bluetooth)
+                rerouteTask = nil
+            }
+        }
     }
 
     /**
@@ -206,6 +301,7 @@ struct ContentView: View {
      * @return Nothing; updates the displayed route or an explanatory message.
      */
     private func loadWalkingRoute() async {
+        guard !isNavigationStarted, walkingRoute == nil else { return }
         walkingRoute = nil
         routeMessage = nil
         guard let destination, let coordinate = location.coordinate else { return }
@@ -227,5 +323,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView(mapsConfigured: false)
+    ContentView(mapsConfigured: false, bluetooth: BluetoothService())
 }
