@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     let mapsConfigured: Bool
+    let glasses: GlassesCameraService
     @State private var bluetooth = BluetoothService()
 
     var body: some View {
@@ -49,6 +50,14 @@ struct HomeView: View {
                                 systemImage: "dot.radiowaves.left.and.right"
                             ) {
                                 BluetoothView(bluetooth: bluetooth)
+                            }
+
+                            menuLink(
+                                title: "Camera Test",
+                                subtitle: "Preview your Meta glasses camera",
+                                systemImage: "camera"
+                            ) {
+                                CameraTestingView(glasses: glasses)
                             }
 
                             menuLink(

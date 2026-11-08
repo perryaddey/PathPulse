@@ -12,6 +12,7 @@ import GooglePlaces
 @main
 struct PathPulseApp: App {
     private let mapsConfigured: Bool
+    @State private var glasses = GlassesCameraService()
 
     /**
      * Initializes Google's SDKs using the locally configured API key.
@@ -32,7 +33,10 @@ struct PathPulseApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView(mapsConfigured: mapsConfigured)
+            HomeView(mapsConfigured: mapsConfigured, glasses: glasses)
+                .onOpenURL { url in
+                    Task { await glasses.handleURL(url) }
+                }
                 .preferredColorScheme(.dark)
         }
     }
