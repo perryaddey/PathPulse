@@ -1,9 +1,14 @@
 # Wristband firmware
 
-PlatformIO project for an ESP32-C3-DevKitM-1, DRV2605L, and NFP-ELV959535 LRA.
+PlatformIO firmware for the PathPulse wristband PCB:
 
-Wiring: driver VIN to 3V3, GND to GND, SDA to GPIO 4, SCL to GPIO 5;
+- Seeed Studio XIAO ESP32-C3 (`seeed_xiao_esp32c3`)
+- DRV2605L haptic driver at I2C address `0x5A`
+- Precision Microdrives C10-100(R7), 10 mm linear resonant actuator, 4 mm type
+
+Wiring: driver VIN to 3V3, GND to GND, SDA to D5/GPIO7, SCL to D4/GPIO6;
 connect the motor to the driver's motor outputs.
+All entry points use the explicit PCB pin mapping in `include/wristband_hardware.h`.
 
 ## Build
 
@@ -13,10 +18,8 @@ Run commands from this directory:
 pio run
 ```
 
-The default `esp32-c3-devkitm-1` environment configures fixed-frequency open-loop
-LRA drive and services the pattern player. This avoids the calibration failure
-seen with these motors and uses the same reduced drive that produced a confirmed
-diagnostic pulse: approximately 169 Hz and a 0.64 V peak clamp.
+The default `wristband-left` environment configures fixed-frequency open-loop
+LRA drive and services the pattern player.
 It advertises as `PathPulse-Left` and accepts binary BLE commands. It does not
 accept serial pattern commands. The `wristband-right` environment uses the same
 firmware and protocol but advertises as `PathPulse-Right`.
@@ -26,7 +29,7 @@ boards are attached):
 
 ```sh
 # Left wristband (also the default build)
-pio run -e esp32-c3-devkitm-1 -t upload
+pio run -e wristband-left -t upload
 # Right wristband
 pio run -e wristband-right -t upload
 ```
@@ -38,6 +41,24 @@ Both requires two ready connections and sends separate writes, without precise
 playback synchronization. Stop all remains available when only one band is ready.
 Connections are manual; disconnected bands do not automatically reconnect or
 replay commands. These controls do not yet drive navigation.
+
+## Motor drive configuration
+
+The pattern player and `motor-diagnostic` use open-loop LRA drive without auto-calibration. Both use the same stronger motor settings:
+
+| Environments | Period register `0x20` | Frequency | Clamp register `0x17` | Nominal peak clamp |
+|---|---|---|---|---|
+| `motor-diagnostic` | `58` | 175.11 Hz | `94` | 1.99468 V |
+| `wristband-left`, `wristband-right`, `vibration-test` | `58` | 175.11 Hz | `94` | 1.99468 V |
+
+The diagnostic settings are in `src/motor_diagnostic.cpp`; the pattern player
+settings are in `src/vibrations.cpp`. Both open-loop implementations use signed RTP amplitude `0x7F` during
+pulses. Full configured amplitude refers to the selected clamp, not the motor's
+maximum rated output. These are configured values, not measured motor voltage;
+peak clamp voltage is not RMS voltage.
+
+Frequency and clamp settings follow the [TI DRV2605L datasheet](https://www.ti.com/lit/ds/symlink/drv2605l.pdf),
+sections 8.5.2.2, 8.5.4.2, and 8.6.26.
 
 ## Manual vibration test
 
@@ -51,28 +72,59 @@ are ignored. This is an interactive hardware test, not an automated `pio test` s
 The test entry point lives in `src/vibration_test.cpp`; the default build excludes it.
 The test build excludes `src/main.cpp`. Both use `src/vibrations.cpp`.
 
-## Current motor patterns
+## Isolated motor diagnostic
 
-### Isolated motor diagnostic
-
-The `motor-diagnostic` environment is a separate serial-only open-loop test for
-troubleshooting calibration failures. It excludes the normal pattern player and
+The `motor-diagnostic` environment is a serial-only open-loop test of the PCB
+and C10-100 motor. It excludes the normal pattern player and
 BLE. Build/upload with `pio run -e motor-diagnostic -t upload`, then open Serial
 Monitor at 115200 baud. It does not vibrate automatically.
 
-Send `1` once for a 300 ms pulse at approximately 169.27 Hz, with a nominal
-0.6366 V peak clamp (register 0x17 = 30). Send `0` to stop/disarm. One pulse is
+Send `1` once for a 300 ms pulse at approximately 175.11 Hz, with a nominal
+1.99468 V peak clamp (register 0x17 = 94). Send `0` to stop/disarm. One pulse is
 allowed per board reset; additional commands cannot extend it. Configuration
 readback and temperature/current checks must pass. A communication fault attempts
 to stop output; if the stop write fails, disconnect USB power as the log requests.
 
-These are configured values, not measured motor voltage. Feeling no vibration at
-this reduced output does not alone establish that the motor is damaged. Upload
-the appropriate normal wristband environment afterward to restore BLE.
+Open Serial Monitor, press the XIAO reset button, wait for successful configuration
+checks and `READY`, then send `1`. Reset and wait for `READY` before repeating.
+Close Serial Monitor before uploading firmware so the serial port is available.
+Upload the appropriate wristband environment to use BLE.
 
-Frequency and clamp settings follow the [TI DRV2605L datasheet](https://www.ti.com/lit/ds/symlink/drv2605l.pdf),
-sections 8.5.4.2 and 8.6.26. Normal firmware now uses the verified open-loop
-configuration instead of requiring closed-loop auto-calibration.
+A perceptible pulse at these diagnostic settings has been confirmed on the PCB.
+Motor voltage and maximum output have not been measured or validated.
+
+## Isolated closed-loop calibration test
+
+`motor-closed-loop` builds only `src/motor_closed_loop.cpp`, with no BLE.
+It uses the same PCB pins and requires manual calibration before playback.
+
+```sh
+pio run -e motor-closed-loop
+pio run -e motor-closed-loop -t upload
+pio device monitor -b 115200
+```
+
+Close Serial Monitor before uploading. After opening it, reset the XIAO:
+
+1. Wait for configuration checks and `READY FOR CALIBRATION`.
+2. Send `c`. **Calibration vibrates the motor**, normally for 1000–1200 ms,
+   with a 1500 ms timeout. Capture the `CAL RESULT` register values.
+3. Only after `CAL PASSED`, send `1` for one 300 ms pulse. Reported resonance
+   is sampled during playback; readings alone do not prove resonance lock.
+4. Output returns to zero for 100 ms of automatic braking, then standby.
+   Send `0` at any stage to stop/disarm. Reset before another calibration/pulse.
+
+The initial rated-voltage register is `58` (approximately 1.39 V RMS target at
+175 Hz with 300 us sampling), and peak clamp is `94` (nominal 1.99468 V).
+The RMS target follows the motor manufacturer's typical 30% auto-resonance
+voltage reduction. Drive time starts at 2.8 ms, then the driver tracks resonance.
+RTP uses unsigned unidirectional input: `255` for full configured output, `0` for
+braking. Calibration results remain volatile; OTP programming is never enabled.
+I2C errors, calibration failure/timeouts, and temperature/current faults disable
+playback until reset. These settings require hardware validation and are not
+measured output values. See [calibration notes](../../../notes/motor-closed-loop-calibration.md).
+
+## Current motor patterns
 
 All pulses use full configured strength, with a 200 ms pause between pulses.
 Each pattern plays once and stops automatically. The app selects which wristband
@@ -101,12 +153,11 @@ not that the path or crossing is clear.
 
 See [the command protocol](../../../docs/haptic-command-protocol.md) for timings,
 priority rules, and the distinction between serial ASCII digits and binary BLE bytes.
-All pulses use full configured amplitude with conservative motor voltage limits.
 
 ## Validation
 
-All three build environments must compile (`esp32-c3-devkitm-1`, `wristband-right`,
-and `vibration-test`). With hardware attached, check every pattern,
+All five build environments must compile (`wristband-left`, `wristband-right`,
+`vibration-test`, `motor-diagnostic`, and `motor-closed-loop`). With hardware attached, check every pattern,
 stop during a pulse, and obstacle interruption before changing the pulse table.
 Generated `.pio/` build outputs and local `.vscode/` settings are ignored by Git.
 

@@ -3,7 +3,7 @@
 
 namespace Vibrations {
 /**
- * Initializes I2C and configures fixed-frequency open-loop drive for the LRA.
+ * Initializes I2C and configures the C10-100 for 175 Hz open-loop LRA drive.
  * @param sdaPin GPIO connected to the driver's SDA pin.
  * @param sclPin GPIO connected to the driver's SCL pin.
  * @return True when the driver passed identity/fault checks and is ready to play.

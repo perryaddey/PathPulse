@@ -1,16 +1,12 @@
 #include <Arduino.h>
 #include "vibrations.h"
+#include "wristband_hardware.h"
 
-namespace {
-constexpr int kSdaPin = 4;
-constexpr int kSclPin = 5;
-}
-
-/** Starts serial pattern testing and configures the haptic driver on GPIO 4/5. */
+/** Starts serial pattern testing and configures haptics on PCB SDA GPIO7/SCL GPIO6. */
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  if (!Vibrations::begin(kSdaPin, kSclPin)) {
+  if (!Vibrations::begin(WristbandHardware::kSdaPin, WristbandHardware::kSclPin)) {
     Serial.println("Haptic startup failed. Check wiring and reset.");
     return;
   }

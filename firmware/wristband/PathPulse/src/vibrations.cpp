@@ -7,9 +7,9 @@ namespace {
 constexpr uint8_t kFullStrength = 0x7F;
 constexpr uint32_t kGapMs = 200;
 constexpr uint32_t kFaultCheckMs = 50;
-// Match the verified diagnostic setup: 0.64 V nominal peak at approximately 169 Hz.
-constexpr uint8_t kVoltageClamp = 30;
-constexpr uint8_t kOpenLoopPeriod = 60;
+// Match the stronger C10-100 diagnostic setup: nominal peak clamp, not RMS.
+constexpr uint8_t kVoltageClamp = 94;
+constexpr uint8_t kOpenLoopPeriod = 58;
 constexpr uint8_t kStandbyMode = 0x40;
 Adafruit_DRV2605 hapticDriver;
 bool driverReady = false;
@@ -80,8 +80,8 @@ bool verifyRegister(uint8_t address, uint8_t expected, uint8_t mask) {
 
 namespace Vibrations {
 /**
- * Initializes the LRA in fixed-frequency open-loop RTP mode without calibration.
- * This matches the low-voltage configuration that produced a confirmed motor pulse.
+ * Initializes the C10-100 LRA in fixed-frequency open-loop RTP mode without calibration.
+ * Uses approximately 175.11 Hz and a nominal 1.99468 V peak clamp (not RMS).
  * @param sdaPin GPIO used for I2C data.
  * @param sclPin GPIO used for I2C clock.
  * @return True when configuration and driver checks pass; false on initialization or driver failure.
@@ -147,7 +147,7 @@ bool begin(int sdaPin, int sclPin) {
   hapticDriver.setRealtimeValue(0);
   hapticDriver.setMode(DRV2605_MODE_REALTIME);
   driverReady = true;
-  Serial.printf("Open-loop haptics ready: approximately %.1f Hz, 0.64 V peak clamp.\n",
+  Serial.printf("Open-loop haptics ready: approximately %.1f Hz, 1.99 V nominal peak clamp (not measured).\n",
                 1000000.0 / (kOpenLoopPeriod * 98.46));
   return true;
 }

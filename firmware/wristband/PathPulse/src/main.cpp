@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include "vibrations.h"
 #include "wristband_ble.h"
+#include "wristband_hardware.h"
 
-/** Configures haptics, then starts BLE even if motor output is unavailable. */
+/** Configures haptics on PCB SDA GPIO7/SCL GPIO6, then starts BLE even if haptics fail. */
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  if (!Vibrations::begin(4, 5)) {
+  if (!Vibrations::begin(WristbandHardware::kSdaPin, WristbandHardware::kSclPin)) {
     Serial.println("Haptic startup failed. Vibration disabled; starting BLE for connection testing.");
   }
   if (!WristbandBLE::begin()) {

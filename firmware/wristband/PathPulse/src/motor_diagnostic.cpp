@@ -1,10 +1,11 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include "wristband_hardware.h"
 
 namespace {
 constexpr uint8_t kAddress = 0x5A;
-constexpr uint8_t kClamp = 30; // 30 * 0.02122 = 0.6366 V nominal peak clamp.
-constexpr uint8_t kPeriod = 60; // 60 * 98.46 us = 5907.6 us, approximately 169.27 Hz.
+constexpr uint8_t kClamp = 94; // 94 * 0.02122 = 1.99468 V nominal peak clamp, not RMS.
+constexpr uint8_t kPeriod = 58; // 58 * 98.46 us = 5710.68 us, approximately 175.11 Hz for C10-100.
 constexpr uint32_t kPulseMs = 300;
 constexpr uint32_t kFaultPollMs = 20;
 bool armed = false;
@@ -94,7 +95,10 @@ bool checkFaults() {
   return true;
 }
 
-/** Starts the sole permitted 300 ms pulse after a manual command and fault check. */
+/**
+ * Starts the sole permitted 300 ms C10-100 pulse after a manual command and fault check.
+ * Uses approximately 175.1 Hz and a nominal 1.99 V peak clamp; output voltage is not measured.
+ */
 void startTest() {
   if (!armed || active) {
     Serial.println("Test unavailable: only one pulse is permitted per reset.");
@@ -102,7 +106,7 @@ void startTest() {
   }
   if (!checkFaults()) { return; }
   armed = false;
-  Serial.println("PULSE START: approximately 169 Hz, 0.64 V peak clamp, 300 ms.");
+  Serial.println("PULSE START: approximately 175.1 Hz, 1.99 V nominal peak clamp (not measured), 300 ms.");
   // Signed RTP 0x7F selects full scale of the deliberately reduced clamp.
   // Load the amplitude while in standby, then enter RTP to begin output.
   pulseStart = millis();
@@ -116,14 +120,14 @@ void startTest() {
 }
 
 /**
- * Initializes an isolated open-loop LRA test on GPIO 4/5, without calibration or BLE.
+ * Initializes an isolated open-loop LRA test on PCB SDA GPIO7/SCL GPIO6, without calibration or BLE.
  * Verifies frequency and reduced clamp before accepting a manual serial command.
  * TI DRV2605L datasheet sections 8.5.2.2, 8.5.4.2, and 8.6.26 define these settings.
  */
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  if (!Wire.begin(4, 5)) {
+  if (!Wire.begin(WristbandHardware::kSdaPin, WristbandHardware::kSclPin)) {
     Serial.println("ERROR: I2C initialization failed.");
     return;
   }
